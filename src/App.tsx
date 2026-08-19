@@ -14,6 +14,8 @@ interface ProjectMeta {
   thumbnail?: string;
   createdAt: number;
   updatedAt: number;
+  clips?: any[];
+  projectDur?: number;
 }
 
 /* ---------------- Startup Screen ---------------- */
@@ -239,18 +241,59 @@ const TopBar = ({ onExport }: { onExport: () => void }) => {
   );
 };
 
+// Project persistence helpers
+const PROJECTS_KEY = "after-imam-projects";
+
+const loadProjects = (): ProjectMeta[] => {
+  try {
+    const stored = localStorage.getItem(PROJECTS_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveProjects = (projects: ProjectMeta[]) => {
+  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+};
+
 export default function App() {
   const [showStartup, setShowStartup] = useState(true);
-  const [showHome, setShowHome] = useState(false);
+  const [showHome, setShowHome] = useState(true);
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [exporting, setExporting] = useState(false);
   const [dragDepth, setDragDepth] = useState(0);
   const importFiles = useStudio((s) => s.importFiles);
   const clips = useStudio((s) => s.clips);
+  const projectDur = useStudio((s) => s.projectDur);
+
+  /* Load projects from localStorage */
+  useEffect(() => {
+    setProjects(loadProjects());
+  }, []);
 
   /* ripristina i file salvati in IndexedDB dopo il reload */
   useEffect(() => {
     void useStudio.getState().hydrateMedia();
   }, []);
+
+  /* Save current project to projects list */
+  useEffect(() => {
+    if (!showHome && clips.length > 0) {
+      const currentProject: ProjectMeta = {
+        id: "current",
+        name: "Progetto Corrente",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        clips: [...clips],
+        projectDur,
+      };
+      const updated = projects.filter(p => p.id !== "current");
+      const newProjects = [...updated, currentProject];
+      setProjects(newProjects);
+      saveProjects(newProjects);
+    }
+  }, [clips, projectDur, showHome]);
 
   /* scorciatoie da tastiera */
   useEffect(() => {
@@ -274,17 +317,40 @@ export default function App() {
 
   const hasFiles = (e: { dataTransfer: DataTransfer }) => Array.from(e.dataTransfer.types).includes("Files");
 
+  const handleNewProject = () => {
+    setShowHome(false);
+  };
+
+  const handleLoadProject = (id: string) => {
+    const project = projects.find(p => p.id === id);
+    if (project && project.clips) {
+      useStudio.getState().clearProject();
+      setTimeout(() => {
+        project.clips?.forEach(clip => {
+          useStudio.getState().addClip(clip);
+        });
+        setShowHome(false);
+      }, 100);
+    }
+  };
+
+  const handleDeleteProject = (id: string) => {
+    const updated = projects.filter(p => p.id !== id);
+    setProjects(updated);
+    saveProjects(updated);
+  };
+
   if (showStartup) {
-    return <StartupScreen onComplete={() => setShowHome(true)} />;
+    return <StartupScreen onComplete={() => {}} />;
   }
 
   if (showHome) {
     return (
       <HomeScreen
-        projects={[]}
-        onNewProject={() => setShowHome(false)}
-        onLoadProject={() => setShowHome(false)}
-        onDeleteProject={() => {}}
+        projects={projects}
+        onNewProject={handleNewProject}
+        onLoadProject={handleLoadProject}
+        onDeleteProject={handleDeleteProject}
       />
     );
   }
