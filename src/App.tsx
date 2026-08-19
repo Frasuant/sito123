@@ -341,7 +341,7 @@ export default function App() {
   };
 
   if (showStartup) {
-    return <StartupScreen onComplete={() => {}} />;
+    return <StartupScreen onComplete={() => setShowStartup(false)} />;
   }
 
   if (showHome) {
