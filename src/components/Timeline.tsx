@@ -5,7 +5,7 @@ import { audioEngine, drawWaveform, getSoundBuffer } from "../lib/audio";
 import { Icon, Slider } from "./ui";
 
 const TRACK_COLORS: Record<string, string> = {
-  bg: "#5aa9ff", fx: "#52d273", text: "#ff7a1a", model: "#e0637c", audio: "#39d0b8",
+  bg: "#8f96a3", fx: "#3ddc97", text: "#e8e8ea", model: "#9fb7ff", audio: "#f2c14e",
 };
 
 /* ---------- waveform dentro la clip audio ---------- */
@@ -256,7 +256,7 @@ export const Timeline = () => {
 
             {/* playhead */}
             <div className="absolute top-0 bottom-0 z-20 pointer-events-none" style={{ left: playhead * zoom }}>
-              <div className="w-px h-full bg-ember-500 shadow-[0_0_8px_rgba(255,122,26,0.8)]" />
+              <div className="w-px h-full bg-ink-50 shadow-[0_0_8px_rgba(255,255,255,0.5)]" />
               <div className="absolute -top-0 -left-[5px] w-0 h-0 border-l-[5px] border-r-[5px] border-t-[7px] border-l-transparent border-r-transparent border-t-ember-500" />
             </div>
           </div>

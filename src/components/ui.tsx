@@ -48,7 +48,7 @@ export const Icon = ({ name, size = 16, className = "" }: { name: keyof typeof p
 /* ---------- slider con label ---------- */
 
 export const Slider = ({
-  label, value, min, max, step = 1, onChange, fmt, color = "#ff7a1a", compact = false,
+  label, value, min, max, step = 1, onChange, fmt, color = "#d4d4d8", compact = false,
 }: {
   label: string; value: number; min: number; max: number; step?: number;
   onChange: (v: number) => void; fmt?: (v: number) => string; color?: string; compact?: boolean;
@@ -99,13 +99,13 @@ export const SectionTitle = ({ children, right }: { children: ReactNode; right?:
 export const Toasts = () => {
   const toasts = useStudio((s) => s.toasts);
   const dismiss = useStudio((s) => s.dismissToast);
-  const icons = { success: "check", info: "info", warn: "warn", danger: "warn" } as const;
-  const colors = {
+  const icons: Record<string, "check" | "info" | "warn"> = { success: "check", info: "info", warn: "warn", error: "warn" };
+  const colors: Record<string, string> = {
     success: "border-limey-400/60 text-limey-400",
     info: "border-skyx-400/60 text-skyx-400",
     warn: "border-warnx-400/60 text-warnx-400",
-    danger: "border-danger-400/60 text-danger-400",
-  } as const;
+    error: "border-danger-400/60 text-danger-400",
+  };
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
       {toasts.map((t) => (

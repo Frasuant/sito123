@@ -1,93 +1,66 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Clip, Keyframe, Lights, TrackId } from "./types";
-import { clamp, uid } from "./types";
-import { getFx } from "./lib/effects";
-import { getPreset } from "./lib/presets";
-import { SOUND_CATALOG } from "./lib/audio";
+import type { Clip, Keyframe, Lights, MediaAsset, StudioState, TrackId } from "./types";
+import { uid, clamp } from "./types";
 import { MODEL_CATALOG } from "./lib/models";
+import { analyzeGreenScreen, poseAt } from "./lib/render";
+import { getPreset } from "./lib/presets";
+import { idbPut, idbGet, idbDel } from "./lib/idb";
 
-export interface Toast {
-  id: string;
-  msg: string;
-  type: "success" | "info" | "warn" | "danger";
-}
+let toastSeq = 1;
 
-interface Studio {
-  clips: Clip[];
-  selectedId: string | null;
-  playhead: number;
-  playing: boolean;
-  loop: boolean;
-  zoom: number;
-  projectDur: number;
-  eco: boolean;
-  lights: Lights;
-  toasts: Toast[];
+const VIDEO_EXT = ["mp4", "webm", "mov", "m4v", "mkv"];
+const MODEL_EXT = ["glb", "gltf", "obj"];
+const IMAGE_EXT = ["png", "jpg", "jpeg", "webp"];
+const MAX_SIZE = 80 * 1024 * 1024;
 
-  addClip: (partial: Omit<Clip, "id"> & { id?: string }) => string;
-  updateClip: (id: string, patch: Partial<Clip>) => void;
-  removeClip: (id: string) => void;
-  duplicateClip: (id: string) => void;
-  splitClip: (id: string) => void;
-  select: (id: string | null) => void;
-  setPlayhead: (t: number) => void;
-  setPlaying: (b: boolean) => void;
-  toggleLoop: () => void;
-  setZoom: (z: number) => void;
-  extendDuration: () => void;
-  setEco: (b: boolean) => void;
-  setLights: (patch: Partial<Lights>) => void;
-  upsertKeyframe: (id: string, t: number, patch: Partial<Keyframe>) => void;
-  removeKeyframe: (id: string, t: number) => void;
-  loadDemo: () => void;
-  clearProject: () => void;
-  toast: (msg: string, type?: Toast["type"]) => void;
-  dismissToast: (id: string) => void;
-}
-
-export const TRACK_OF: Record<Clip["kind"], TrackId> = {
-  bg: "bg", fx: "fx", video: "fx", text: "text", model: "model", audio: "audio",
+const mimeFor = (a: MediaAsset) => {
+  if (a.kind === "video") {
+    const map: Record<string, string> = { mp4: "video/mp4", m4v: "video/mp4", mov: "video/quicktime", webm: "video/webm", mkv: "video/x-matroska" };
+    return map[a.ext] ?? "video/mp4";
+  }
+  if (a.kind === "image") {
+    const map: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp" };
+    return map[a.ext] ?? "image/png";
+  }
+  return "application/octet-stream";
 };
 
-const DEFAULT_LIGHTS: Lights = {
-  ambient: 0.5, keyIntensity: 2.4, keyColor: "#ffffff",
-  keyAngle: 35, keyElev: 45, rimIntensity: 1.2, rimColor: "#39d0b8",
-};
+const cleanName = (f: string) => f.replace(/\.[^.]+$/, "");
 
-const grow = (dur: number, end: number) => Math.max(dur, Math.ceil(end + 1));
-
-export const useStudio = create<Studio>()(
+export const useStudio = create<StudioState>()(
   persist(
     (set, get) => ({
       clips: [],
-      selectedId: null,
+      mediaAssets: [],
       playhead: 0,
       playing: false,
       loop: true,
       zoom: 60,
-      projectDur: 12,
-      eco: false,
-      lights: DEFAULT_LIGHTS,
+      selectedId: null,
+      projectDur: 15,
       toasts: [],
+      eco: false,
+      fps: 0,
+      lights: {
+        ambient: 0.5, keyIntensity: 2.4, keyAngle: 35, keyElev: 40,
+        keyColor: "#ffffff", rimColor: "#3bd6ae", rimIntensity: 1.2,
+      },
 
-      addClip: (partial) => {
-        const id = partial.id ?? uid();
-        const clip: Clip = { ...partial, id };
-        set((s) => ({
+      addClip: (c) => {
+        const id = uid();
+        const clip: Clip = { id, ...c };
+        const s = get();
+        set({
           clips: [...s.clips, clip],
-          projectDur: grow(s.projectDur, clip.start + clip.duration),
           selectedId: id,
-        }));
+          projectDur: Math.max(s.projectDur, Math.ceil(clip.start + clip.duration + 2)),
+        });
         return id;
       },
 
       updateClip: (id, patch) =>
-        set((s) => {
-          const clips = s.clips.map((c) => (c.id === id ? { ...c, ...patch } : c));
-          const maxEnd = clips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
-          return { clips, projectDur: Math.max(s.projectDur, Math.ceil(maxEnd + 0.5)) };
-        }),
+        set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) })),
 
       removeClip: (id) =>
         set((s) => ({
@@ -95,97 +68,278 @@ export const useStudio = create<Studio>()(
           selectedId: s.selectedId === id ? null : s.selectedId,
         })),
 
-      duplicateClip: (id) => {
-        const c = get().clips.find((x) => x.id === id);
+      splitClip: (id) => {
+        const s = get();
+        const c = s.clips.find((x) => x.id === id);
         if (!c) return;
-        const copy: Clip = { ...c, id: uid(), start: c.start + c.duration, kfs: c.kfs ? c.kfs.map((k) => ({ ...k })) : undefined };
-        set((s) => ({
+        const t = s.playhead;
+        if (t <= c.start + 0.05 || t >= c.start + c.duration - 0.05) return;
+        const cut = t - c.start;
+        const right: Clip = {
+          ...c, id: uid(), start: t, duration: c.duration - cut,
+          kfs: c.kfs?.filter((k) => k.t >= cut).map((k) => ({ ...k, t: k.t - cut })),
+        };
+        set({ clips: [...s.clips.map((x) => (x.id === id ? { ...x, duration: cut } : x)), right] });
+        get().toast("Clip divisa", "info");
+      },
+
+      duplicateClip: (id) => {
+        const s = get();
+        const c = s.clips.find((x) => x.id === id);
+        if (!c) return;
+        const copy: Clip = { ...c, id: uid(), start: c.start + c.duration };
+        set({
           clips: [...s.clips, copy],
           selectedId: copy.id,
-          projectDur: grow(s.projectDur, copy.start + copy.duration),
-        }));
+          projectDur: Math.max(s.projectDur, Math.ceil(copy.start + copy.duration + 2)),
+        });
         get().toast("Clip duplicata", "success");
       },
 
-      splitClip: (id) =>
-        set((s) => {
-          const c = s.clips.find((x) => x.id === id);
-          const t = s.playhead;
-          if (!c || t <= c.start + 0.05 || t >= c.start + c.duration - 0.05) return {};
-          const at = t - c.start;
-          const left: Clip = { ...c, duration: at, kfs: c.kfs ? c.kfs.filter((k) => k.t <= at).map((k) => ({ ...k })) : undefined };
-          const right: Clip = {
-            ...c, id: uid(), start: t, duration: c.duration - at,
-            kfs: c.kfs ? c.kfs.filter((k) => k.t >= at).map((k) => ({ ...k, t: k.t - at })) : undefined,
-          };
-          return { clips: [...s.clips.filter((x) => x.id !== id), left, right], selectedId: right.id };
-        }),
-
-      select: (id) => set({ selectedId: id }),
-      setPlayhead: (t) => set((s) => ({ playhead: clamp(t, 0, s.projectDur) })),
-      setPlaying: (b) => set({ playing: b }),
-      toggleLoop: () => set((s) => ({ loop: !s.loop })),
-      setZoom: (z) => set({ zoom: clamp(z, 20, 200) }),
-      extendDuration: () => set((s) => ({ projectDur: s.projectDur + 5 })),
-      setEco: (b) => set({ eco: b }),
-      setLights: (patch) => set((s) => ({ lights: { ...s.lights, ...patch } })),
-
-      upsertKeyframe: (id, t, patch) =>
-        set((s) => ({
-          clips: s.clips.map((c) => {
-            if (c.id !== id) return c;
-            const kfs = [...(c.kfs ?? [])];
-            const idx = kfs.findIndex((k) => Math.abs(k.t - t) < 0.06);
-            if (idx >= 0) kfs[idx] = { ...kfs[idx], ...patch, t: kfs[idx].t };
-            else kfs.push({ t, x: 0.5, y: 0.5, s: 0.42, rx: 0.4, ry: 0, rz: 0, ...patch });
-            kfs.sort((a, b) => a.t - b.t);
-            return { ...c, kfs };
-          }),
-        })),
-
-      removeKeyframe: (id, t) =>
-        set((s) => ({
-          clips: s.clips.map((c) =>
-            c.id === id ? { ...c, kfs: (c.kfs ?? []).filter((k) => Math.abs(k.t - t) > 0.06) } : c
-          ),
-        })),
-
-      loadDemo: () => {
-        const kfs = (arr: [number, number, number, number][]) =>
-          arr.map(([t, x, y, s]) => ({ t, x, y, s, rx: 0.5, ry: t * 1.2, rz: 0 }));
-        const demo: Clip[] = [
-          { id: uid(), kind: "bg", track: "bg", refId: "synthwave", name: "Synthwave Sunset", start: 0, duration: 14 },
-          { id: uid(), kind: "text", track: "text", refId: "popin", name: "Titolo Pop", text: "MONTA COSÌ", preset: "popin", font: "Space Grotesk", fontSize: 88, color: "#ffd166", strokeColor: "#10141b", strokeWidth: 6, x: 0.5, y: 0.4, start: 0.4, duration: 2.6 },
-          { id: uid(), kind: "audio", track: "audio", refId: "whoosh", name: "Whoosh", start: 0.3, duration: 0.9, gain: 0.8 },
-          { id: uid(), kind: "model", track: "model", refId: "crystal", name: "Cristallo", modelColor: "#ffb27a", wireframe: false, start: 0, duration: 14, kfs: kfs([[0, -0.15, 0.62, 0.3], [4, 0.5, 0.6, 0.42], [9, 0.78, 0.35, 0.3], [13.5, 1.15, 0.55, 0.36]]) },
-          { id: uid(), kind: "fx", track: "fx", refId: "explosion", name: "Esplosione Bomba", start: 4.2, duration: 2.4, chroma: true, elScale: 1, elX: 0.5, elY: 0.5 },
-          { id: uid(), kind: "audio", track: "audio", refId: "boom", name: "Boom Cinematico", start: 4.2, duration: 1.6, gain: 0.9 },
-          { id: uid(), kind: "text", track: "text", refId: "typewriter", name: "Typewriter", text: "Video faceless in 5 minuti, senza camera.", preset: "typewriter", font: "Manrope", fontSize: 46, color: "#e6ebf4", strokeColor: "#10141b", strokeWidth: 5, x: 0.5, y: 0.72, start: 6.6, duration: 4.2 },
-          { id: uid(), kind: "audio", track: "audio", refId: "keys", name: "Tastiera Typing", start: 6.7, duration: 1.1, gain: 0.5 },
-          { id: uid(), kind: "fx", track: "fx", refId: "money", name: "Pioggia di Soldi", start: 10.8, duration: 2.6, chroma: true, elScale: 1, elX: 0.5, elY: 0.5 },
-          { id: uid(), kind: "audio", track: "audio", refId: "cash", name: "Cha-Ching", start: 10.9, duration: 0.7, gain: 0.7 },
-          { id: uid(), kind: "text", track: "text", refId: "lowerthird", name: "Lower Third", text: "@iltuocanale — segui per altri tips", preset: "lowerthird", font: "Manrope", fontSize: 38, color: "#ff7a1a", x: 0.5, y: 0.88, start: 10.2, duration: 3.8 },
-        ];
-        set({ clips: demo, playhead: 0, playing: false, projectDur: 15, selectedId: null });
-        get().toast("Progetto demo caricato — premi Riproduci", "success");
+      upsertKeyframe: (clipId, t, pose) => {
+        const s = get();
+        const c = s.clips.find((x) => x.id === clipId);
+        if (!c) return;
+        const base = poseAt(c, t);
+        const kf: Keyframe = { ...base, ...pose, t };
+        const kfs = (c.kfs ?? []).filter((k) => Math.abs(k.t - t) > 0.06);
+        kfs.push(kf);
+        kfs.sort((a, b) => a.t - b.t);
+        set({ clips: s.clips.map((x) => (x.id === clipId ? { ...x, kfs } : x)) });
       },
 
-      clearProject: () => set({ clips: [], selectedId: null, playhead: 0, playing: false, projectDur: 12 }),
+      select: (id) => set({ selectedId: id }),
+      setPlayhead: (t) => set({ playhead: clamp(t, 0, get().projectDur) }),
+      setPlaying: (b) => set({ playing: b }),
+      setLoop: (b) => set({ loop: b }),
+      toggleLoop: () => set((s) => ({ loop: !s.loop })),
+      setZoom: (z) => set({ zoom: z }),
+      setLights: (patch) => set((s) => ({ lights: { ...s.lights, ...patch } })),
+      setEco: (b) => set({ eco: b }),
+      setFps: (n) => set({ fps: n }),
 
       toast: (msg, type = "info") => {
-        const id = uid();
+        const id = toastSeq++;
         set((s) => ({ toasts: [...s.toasts.slice(-3), { id, msg, type }] }));
         setTimeout(() => get().dismissToast(id), 3400);
       },
       dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+      extendDuration: () => set((s) => ({ projectDur: s.projectDur + 5 })),
+
+      /* ---------------- media import ---------------- */
+
+      importFiles: async (files) => {
+        const list = Array.from(files);
+        if (!list.length) return;
+        for (const f of list) {
+          const ext = (f.name.split(".").pop() ?? "").toLowerCase();
+          const name = cleanName(f.name);
+          if (f.size > MAX_SIZE) {
+            get().toast(`"${name}" supera il limite di 80 MB`, "error");
+            continue;
+          }
+
+          /* modello 3D */
+          if (MODEL_EXT.includes(ext)) {
+            const id = uid();
+            const src = URL.createObjectURL(f);
+            const { getSceneManager } = await import("./lib/three");
+            const ok = await getSceneManager(get().eco).loadCustom(`custom:${id}`, src, ext);
+            if (!ok) {
+              get().toast(`"${name}": file 3D non valido (usa .glb, .gltf o .obj)`, "error");
+              continue;
+            }
+            try { await idbPut(id, await f.arrayBuffer()); } catch { /* quota */ }
+            const asset: MediaAsset = { id, name, kind: "model", ext, size: f.size, src };
+            set((s) => ({ mediaAssets: [...s.mediaAssets, asset] }));
+            get().addClip({
+              kind: "model", track: "model", refId: `custom:${id}`, name,
+              start: get().playhead, duration: 6, elX: 0.5, elY: 0.5, elScale: 1,
+              wireframe: false, lights: { ...get().lights },
+            });
+            get().toast(`Modello "${name}" in scena — trascinalo per creare keyframe`, "success");
+            continue;
+          }
+
+          /* video (con rimozione AI del green screen) */
+          if (VIDEO_EXT.includes(ext) || f.type.startsWith("video/")) {
+            const id = uid();
+            const src = URL.createObjectURL(f);
+            const dur = await new Promise<number>((res) => {
+              const el = document.createElement("video");
+              el.src = src; el.preload = "metadata"; el.muted = true;
+              el.onloadedmetadata = () => res(el.duration || 4);
+              el.onerror = () => res(4);
+              setTimeout(() => res(4), 3000);
+            });
+            try { await idbPut(id, await f.arrayBuffer()); } catch { /* quota */ }
+            const asset: MediaAsset = { id, name, kind: "video", ext, size: f.size, src, videoDur: dur };
+            set((s) => ({ mediaAssets: [...s.mediaAssets, asset] }));
+            const clipId = get().addClip({
+              kind: "video", track: "fx", refId: id, src, name,
+              start: get().playhead, duration: Math.min(Math.max(dur, 1), 6),
+              chroma: false, keyColor: "#00ff00", tolerance: 90, softness: 2.6,
+              elX: 0.5, elY: 0.5, elScale: 1,
+            });
+            get().toast(`AI: analisi di "${name}" in corso…`, "info");
+            const vel = document.createElement("video");
+            vel.src = src; vel.muted = true; vel.playsInline = true; vel.preload = "auto";
+            const ai = await analyzeGreenScreen(vel);
+            set((s) => ({
+              mediaAssets: s.mediaAssets.map((a) =>
+                a.id === id ? { ...a, aiGreen: ai.isGreen, aiKey: ai.key, aiTol: ai.tolerance } : a
+              ),
+            }));
+            if (ai.isGreen) {
+              get().updateClip(clipId, { chroma: true, keyColor: ai.key, tolerance: ai.tolerance, softness: 2.6 });
+              get().toast(`AI: green screen rimosso da "${name}"`, "success");
+            } else {
+              get().toast(`AI: nessun green screen rilevato in "${name}"`, "info");
+            }
+            continue;
+          }
+
+          /* immagine → sfondo */
+          if (IMAGE_EXT.includes(ext) || f.type.startsWith("image/")) {
+            const id = uid();
+            const src = URL.createObjectURL(f);
+            try { await idbPut(id, await f.arrayBuffer()); } catch { /* quota */ }
+            const asset: MediaAsset = { id, name, kind: "image", ext, size: f.size, src };
+            set((s) => ({ mediaAssets: [...s.mediaAssets, asset] }));
+            get().addClip({
+              kind: "bg", track: "bg", refId: `img:${id}`, src, name,
+              start: get().playhead, duration: 5,
+            });
+            get().toast(`Immagine "${name}" aggiunta come sfondo`, "success");
+            continue;
+          }
+
+          get().toast(`Formato ".${ext}" non supportato`, "error");
+        }
+      },
+
+      removeMediaAsset: (id) => {
+        void idbDel(id).catch(() => undefined);
+        set((s) => ({
+          mediaAssets: s.mediaAssets.filter((a) => a.id !== id),
+          clips: s.clips.filter((c) =>
+            !(c.refId === id || c.refId === `img:${id}` || c.refId === `custom:${id}`)
+          ),
+        }));
+        get().toast("Media rimosso dalla libreria", "info");
+      },
+
+      addAssetToTimeline: (id) => {
+        const a = get().mediaAssets.find((x) => x.id === id);
+        if (!a) return;
+        if (!a.src) { get().toast("File non disponibile — reimportalo", "error"); return; }
+        if (a.kind === "model") {
+          get().addClip({
+            kind: "model", track: "model", refId: `custom:${id}`, name: a.name,
+            start: get().playhead, duration: 6, elX: 0.5, elY: 0.5, elScale: 1,
+            wireframe: false, lights: { ...get().lights },
+          });
+        } else if (a.kind === "video") {
+          get().addClip({
+            kind: "video", track: "fx", refId: id, src: a.src, name: a.name,
+            start: get().playhead, duration: Math.min(Math.max(a.videoDur ?? 4, 1), 6),
+            chroma: a.aiGreen ?? true, keyColor: a.aiKey ?? "#00ff00", tolerance: a.aiTol ?? 90, softness: 2.6,
+            elX: 0.5, elY: 0.5, elScale: 1,
+          });
+        } else {
+          get().addClip({
+            kind: "bg", track: "bg", refId: `img:${id}`, src: a.src, name: a.name,
+            start: get().playhead, duration: 5,
+          });
+        }
+        get().toast(`"${a.name}" aggiunto al playhead`, "success");
+      },
+
+      /* ripristina gli object-URL da IndexedDB dopo il reload */
+      hydrateMedia: async () => {
+        if (hydrated) return;
+        hydrated = true;
+        const assets = get().mediaAssets;
+        if (!assets.length) return;
+        let missing = 0;
+        const updated: MediaAsset[] = [];
+        for (const a of assets) {
+          try {
+            const buf = await idbGet(a.id);
+            if (!buf) { updated.push({ ...a, src: null, missing: true }); missing++; continue; }
+            const src = URL.createObjectURL(new Blob([buf], { type: mimeFor(a) }));
+            if (a.kind === "model") {
+              const { getSceneManager } = await import("./lib/three");
+              const ok = await getSceneManager(get().eco).loadCustom(`custom:${a.id}`, src, a.ext);
+              if (!ok) { updated.push({ ...a, src: null, missing: true }); missing++; continue; }
+            }
+            updated.push({ ...a, src });
+          } catch {
+            updated.push({ ...a, src: null, missing: true });
+            missing++;
+          }
+        }
+        const patched = get().clips.map((c) => {
+          if (c.kind === "video") {
+            const a = updated.find((x) => x.id === c.refId);
+            if (a?.src) return { ...c, src: a.src };
+          }
+          if (c.kind === "bg" && c.refId.startsWith("img:")) {
+            const a = updated.find((x) => x.id === c.refId.slice(4));
+            if (a?.src) return { ...c, src: a.src };
+          }
+          return c;
+        });
+        set({ mediaAssets: updated, clips: patched });
+        if (missing) get().toast(`${missing} file non trovati nel browser: reimportali dalla tab Media`, "info");
+      },
+
+      loadDemo: () => {
+        const L = get().lights;
+        const clips: Clip[] = [
+          { id: uid(), kind: "bg", track: "bg", refId: "neon", name: "Neon Tunnel", start: 0, duration: 15 },
+          {
+            id: uid(), kind: "model", track: "model", refId: "crystal", name: "Cristallo 3D",
+            start: 0, duration: 15, elX: 0.5, elY: 0.5, elScale: 1, modelColor: "#c9c9cf", wireframe: false,
+            lights: { ...L, rimColor: "#3bd6ae" },
+            kfs: [
+              { t: 0, x: 0.5, y: 0.55, s: 0.5, rx: 0.5, ry: 0, rz: 0 },
+              { t: 3, x: 0.74, y: 0.42, s: 0.38, rx: 1.1, ry: 2.2, rz: 0.2 },
+              { t: 6, x: 0.28, y: 0.5, s: 0.62, rx: 0.2, ry: 4.4, rz: -0.15 },
+              { t: 10, x: 0.5, y: 0.55, s: 0.5, rx: 0.5, ry: 6.6, rz: 0 },
+            ],
+          },
+          { id: uid(), kind: "fx", track: "fx", refId: "explosion", name: "Esplosione", start: 6.4, duration: 2.2, chroma: true, elX: 0.28, elY: 0.5, elScale: 1.1 },
+          {
+            id: uid(), kind: "text", track: "text", refId: "txt", name: "Titolo",
+            start: 1, duration: 4, text: "IL TUO VIDEO", preset: "slideup",
+            x: 0.5, y: 0.22, fontSize: 9, color: "#f5f5f5", font: "Space Grotesk", strokeWidth: 0, strokeColor: "#000000",
+          },
+          {
+            id: uid(), kind: "text", track: "text", refId: "txt", name: "Sottotitolo",
+            start: 7, duration: 3.5, text: "Moviola Studio", preset: "typewriter",
+            x: 0.5, y: 0.78, fontSize: 4.5, color: "#eaeaed", font: "Manrope", strokeWidth: 0, strokeColor: "#000000",
+          },
+          { id: uid(), kind: "audio", track: "audio", refId: "boom", name: "Boom Cinematico", start: 6.4, duration: 1.6, gain: 0.9 },
+          { id: uid(), kind: "audio", track: "audio", refId: "ariaUp", name: "Aria Su (Swish)", start: 0.95, duration: 0.55, gain: 0.6 },
+          { id: uid(), kind: "audio", track: "audio", refId: "beat", name: "Beat Lo-Fi", start: 2, duration: 8, gain: 0.4 },
+        ];
+        set({ clips, playhead: 0, selectedId: null, projectDur: 15, playing: false });
+        get().toast("Progetto demo caricato — premi Spazio", "success");
+      },
+
+      clearProject: () =>
+        set({ clips: [], playhead: 0, selectedId: null, projectDur: 15, playing: false }),
     }),
     {
-      name: "moviola-studio-v1",
+      name: "moviola-studio-v2",
       partialize: (s) => ({
-        clips: s.clips.filter((c) => c.kind !== "video").map((c) => ({ ...c, src: undefined })),
+        clips: s.clips,
+        mediaAssets: s.mediaAssets.map((a) => ({ ...a, src: null })),
         lights: s.lights,
-        projectDur: s.projectDur,
         zoom: s.zoom,
+        projectDur: s.projectDur,
         loop: s.loop,
         eco: s.eco,
       }),
@@ -193,54 +347,52 @@ export const useStudio = create<Studio>()(
   )
 );
 
-/* helper per i pannelli: crea clip pronte */
+let hydrated = false;
 
+/* helper per i pannelli */
 export const useAddFromLibrary = () => {
   return {
     addPreset(presetId: string) {
       const { addClip, toast, playhead } = useStudio.getState();
       const p = getPreset(presetId);
       addClip({
-        kind: "text", track: "text", refId: p.id, name: p.name, start: playhead, duration: p.dur,
-        text: p.id === "lowerthird" ? "@iltuocanale" : p.sample.toUpperCase(), preset: p.id,
-        font: "Space Grotesk", fontSize: p.id === "lowerthird" ? 40 : 68,
-        color: p.css.color, strokeColor: "#10141b", strokeWidth: 5, x: 0.5, y: p.id === "lowerthird" ? 0.86 : 0.45,
+        kind: "text", track: "text", refId: "txt", name: p.name,
+        start: playhead, duration: 3,
+        text: "IL TUO TITOLO", preset: presetId, x: 0.5, y: 0.45,
+        fontSize: 8, color: "#f5f5f5", font: "Space Grotesk", strokeWidth: 0, strokeColor: "#000000",
       });
-      toast(`Preset "${p.name}" aggiunto`, "success");
+      toast(`Testo "${p.name}" aggiunto al playhead`, "success");
     },
-    addSound(soundId: string) {
+    addSound(soundId: string, name: string, dur: number) {
       const { addClip, toast, playhead } = useStudio.getState();
-      const s = SOUND_CATALOG.find((x) => x.id === soundId)!;
-      addClip({ kind: "audio", track: "audio", refId: s.id, name: s.name, start: playhead, duration: s.dur, gain: 0.8 });
-      toast(`"${s.name}" importato in timeline`, "success");
+      addClip({ kind: "audio", track: "audio", refId: soundId, name, start: playhead, duration: dur, gain: 0.8 });
+      toast(`"${name}" aggiunto in timeline`, "success");
     },
-    addFx(fxId: string) {
+    addFx(fxId: string, name: string, cycle: number) {
       const { addClip, toast, playhead } = useStudio.getState();
-      const f = getFx(fxId);
-      addClip({ kind: "fx", track: "fx", refId: f.id, name: f.name, start: playhead, duration: f.dur, chroma: true, elScale: 1, elX: 0.5, elY: 0.5 });
-      toast(`Green screen "${f.name}" aggiunto (chroma ON)`, "success");
+      addClip({
+        kind: "fx", track: "fx", refId: fxId, name, start: playhead,
+        duration: cycle, chroma: true, elX: 0.5, elY: 0.5, elScale: 1,
+      });
+      toast(`"${name}" aggiunto — green screen attivo`, "success");
     },
     addBg(bgId: string, name: string) {
-      const { addClip, toast, playhead, projectDur } = useStudio.getState();
-      const dur = Math.max(4, projectDur - playhead);
-      addClip({ kind: "bg", track: "bg", refId: bgId, name, start: playhead, duration: dur });
+      const { addClip, toast, playhead } = useStudio.getState();
+      addClip({ kind: "bg", track: "bg", refId: bgId, name, start: playhead, duration: 6 });
       toast(`Sfondo "${name}" aggiunto`, "success");
     },
     addModel(modelId: string) {
-      const { addClip, toast, playhead } = useStudio.getState();
+      const { addClip, toast, playhead, lights } = useStudio.getState();
       const m = MODEL_CATALOG.find((x) => x.id === modelId)!;
-      const colors: Record<string, string> = { crystal: "#ffb27a", knot: "#39d0b8", gem: "#e0637c", cube: "#5aa9ff", pyramid: "#ffd166", sphere: "#b7c0d0", torus: "#52d273", dodeca: "#ff9548" };
       addClip({
-        kind: "model", track: "model", refId: m.id, name: m.name, start: playhead, duration: 6,
-        modelColor: colors[m.id] ?? "#ffb27a", wireframe: false,
-        kfs: [
-          { t: 0, x: -0.12, y: 0.55, s: 0.34, rx: 0.4, ry: 0, rz: 0 },
-          { t: 3, x: 0.5, y: 0.5, s: 0.46, rx: 0.4, ry: 2.4, rz: 0 },
-          { t: 6, x: 1.12, y: 0.45, s: 0.34, rx: 0.6, ry: 5, rz: 0 },
-        ],
+        kind: "model", track: "model", refId: modelId, name: m.name,
+        start: playhead, duration: 6, elX: 0.5, elY: 0.5, elScale: 1,
+        modelColor: "#c9c9cf", wireframe: false, lights: { ...lights },
       });
-      toast(`Modello "${m.name}" in scena — keyframe pronti`, "success");
+      toast(`Modello "${m.name}" in scena — trascinalo per creare keyframe`, "success");
     },
     jump(t: number) { useStudio.getState().setPlayhead(t); },
   };
 };
+
+export type { TrackId };

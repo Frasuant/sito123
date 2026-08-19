@@ -220,7 +220,7 @@ export const Preview = () => {
               style={{
                 left: `${selBox.x * 100}%`, top: `${selBox.y * 100}%`,
                 width: `${selBox.w * 100}%`, height: `${selBox.h * 100}%`,
-                boxShadow: "0 0 0 1px rgba(0,0,0,0.5), 0 0 18px rgba(255,122,26,0.25)",
+                boxShadow: "0 0 0 1px rgba(0,0,0,0.5), 0 0 18px rgba(255,255,255,0.18)",
               }}
             >
               <span className="absolute -top-5 left-0 text-[9.5px] font-bold bg-ember-500 text-ink-950 px-1.5 py-0.5 rounded-sm whitespace-nowrap">

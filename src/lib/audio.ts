@@ -151,6 +151,83 @@ export const SOUND_CATALOG: SoundDef[] = [
       osc(ctx, out, "triangle", 220, 220, 0, 1.9, 0.1);
     },
   },
+  {
+    id: "ariaUp", name: "Aria Su (Swish)", desc: "Per far apparire testi e overlay", dur: 0.55, tags: "aria swish testo apparizione transizione",
+    build(ctx, out) {
+      noiseHit(ctx, out, 0, 0.5, 0.75, "bandpass", 300, 3600);
+      osc(ctx, out, "sine", 240, 880, 0, 0.45, 0.22);
+    },
+  },
+  {
+    id: "ariaDown", name: "Aria Giù", desc: "Uscita morbida di un elemento", dur: 0.55, tags: "aria swish uscita transizione",
+    build(ctx, out) {
+      noiseHit(ctx, out, 0, 0.5, 0.7, "bandpass", 3400, 280);
+      osc(ctx, out, "sine", 700, 180, 0, 0.45, 0.2);
+    },
+  },
+  {
+    id: "textTick", name: "Tick Testo", desc: "Scatto breve per singole lettere", dur: 0.14, tags: "tick testo lettera ui",
+    build(ctx, out) {
+      noiseHit(ctx, out, 0, 0.035, 0.55, "bandpass", 2600);
+      osc(ctx, out, "square", 1200, 700, 0, 0.05, 0.15);
+    },
+  },
+  {
+    id: "shutter", name: "Scatto Camera", desc: "Otturatore fotografico", dur: 0.3, tags: "camera foto scatto shutter",
+    build(ctx, out) {
+      noiseHit(ctx, out, 0, 0.045, 0.6, "highpass", 2500);
+      noiseHit(ctx, out, 0.1, 0.06, 0.5, "highpass", 1800);
+      osc(ctx, out, "square", 900, 500, 0.1, 0.04, 0.12);
+    },
+  },
+  {
+    id: "chime", name: "Chime Successo", desc: "Due note positive", dur: 0.9, tags: "successo vittoria notifica",
+    build(ctx, out) {
+      osc(ctx, out, "sine", 660, 659, 0, 0.5, 0.45);
+      osc(ctx, out, "sine", 990, 988, 0.12, 0.7, 0.4);
+      osc(ctx, out, "sine", 1320, 1318, 0.12, 0.5, 0.15);
+    },
+  },
+  {
+    id: "reverseRiser", name: "Reverse Swell", desc: "Crescendo invertito, perfetto pre-drop", dur: 1.4, tags: "reverse swell transizione build",
+    build(ctx, out) {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuffer(ctx, 1.5);
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.setValueAtTime(500, 0);
+      f.frequency.exponentialRampToValueAtTime(2800, 1.3);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, 0);
+      g.gain.exponentialRampToValueAtTime(0.65, 1.28);
+      g.gain.setValueAtTime(0.0001, 1.3);
+      src.connect(f).connect(g).connect(out);
+      src.start(0); src.stop(1.4);
+      noiseHit(ctx, out, 1.3, 0.08, 0.4, "highpass", 3000);
+    },
+  },
+  {
+    id: "bassSweep", name: "Sweep Basso", desc: "Scivolata di bassi profonda", dur: 0.9, tags: "bassi sweep profondo",
+    build(ctx, out) {
+      osc(ctx, out, "sine", 320, 38, 0, 0.85, 0.85);
+      noiseHit(ctx, out, 0, 0.5, 0.25, "lowpass", 700, 90);
+    },
+  },
+  {
+    id: "glitchHit", name: "Glitch", desc: "Distorsione digitale breve", dur: 0.36, tags: "glitch digitale errore",
+    build(ctx, out) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      const freqs = [420, 1100, 260, 1500, 180];
+      freqs.forEach((f, i) => o.frequency.setValueAtTime(f, i * 0.065));
+      env(ctx, g.gain, 0, 0.005, 0.3, 0.34);
+      o.connect(g).connect(out);
+      o.start(0); o.stop(0.36);
+      noiseHit(ctx, out, 0, 0.06, 0.35, "highpass", 4500);
+      noiseHit(ctx, out, 0.18, 0.05, 0.3, "bandpass", 2200);
+    },
+  },
 ];
 
 /* ---------- rendering offline + WAV ---------- */

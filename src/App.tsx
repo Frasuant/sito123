@@ -85,6 +85,13 @@ const TopBar = ({ onExport }: { onExport: () => void }) => {
 
 export default function App() {
   const [exporting, setExporting] = useState(false);
+  const [dragDepth, setDragDepth] = useState(0);
+  const importFiles = useStudio((s) => s.importFiles);
+
+  /* ripristina i file salvati in IndexedDB dopo il reload */
+  useEffect(() => {
+    void useStudio.getState().hydrateMedia();
+  }, []);
 
   /* scorciatoie da tastiera */
   useEffect(() => {
@@ -106,8 +113,21 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const hasFiles = (e: { dataTransfer: DataTransfer }) => Array.from(e.dataTransfer.types).includes("Files");
+
   return (
-    <div className="h-full flex flex-col bg-ink-950 text-ink-100 overflow-hidden">
+    <div
+      className="h-full flex flex-col bg-ink-950 text-ink-100 overflow-hidden relative"
+      onDragEnter={(e) => { if (hasFiles(e)) { e.preventDefault(); setDragDepth((d) => d + 1); } }}
+      onDragOver={(e) => { if (hasFiles(e)) e.preventDefault(); }}
+      onDragLeave={() => setDragDepth((d) => Math.max(0, d - 1))}
+      onDrop={(e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        setDragDepth(0);
+        if (e.dataTransfer.files.length) void importFiles(e.dataTransfer.files);
+      }}
+    >
       <TopBar onExport={() => setExporting(true)} />
       <div className="flex-1 flex min-h-0">
         <LeftPanel />
@@ -119,6 +139,21 @@ export default function App() {
       </div>
       {exporting && <ExportModal onClose={() => setExporting(false)} />}
       <Toasts />
+
+      {dragDepth > 0 && (
+        <div className="absolute inset-0 z-40 bg-ink-950/80 backdrop-blur-sm grid place-items-center pointer-events-none p-8">
+          <div className="w-full max-w-[520px] rounded-2xl border-2 border-dashed border-ink-200 bg-ink-900/80 px-8 py-12 text-center">
+            <div className="mx-auto mb-4 w-14 h-14 rounded-xl bg-ink-800 border border-ink-600 grid place-items-center text-ink-100">
+              <Icon name="upload" size={26} />
+            </div>
+            <p className="font-display font-bold text-[17px] text-ink-50 mb-1">Rilascia per importare</p>
+            <p className="text-[12px] text-ink-300 leading-relaxed">
+              Video, immagini e modelli 3D (.glb .gltf .obj)<br />
+              <span className="text-warnx-400 font-bold">AI</span> rimuoverà automaticamente il green screen dai video
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

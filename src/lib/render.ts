@@ -3,20 +3,7 @@ import { clamp, lerp, smooth } from "../types";
 import { getBg } from "./backgrounds";
 import { getFx, GREEN } from "./effects";
 import { getPreset } from "./presets";
-import type { SceneManager } from "./three";
-
-/* three.js viene caricato in un chunk separato, solo quando serve un modello 3D */
-let mgr: SceneManager | null = null;
-let mgrPromise: Promise<SceneManager> | null = null;
-const ensureThree = (eco: boolean) => {
-  if (!mgrPromise) {
-    mgrPromise = import("./three").then((m) => {
-      mgr = m.getSceneManager(eco);
-      return mgr;
-    });
-  }
-  return mgrPromise;
-};
+import { getSceneManager } from "./three";
 
 /* ---------- keyframe ---------- */
 
@@ -40,14 +27,14 @@ export const poseAt = (clip: Clip, t: number): Keyframe => {
   return kfs[0];
 };
 
-/* ---------- video uploadati (green screen personali) ---------- */
+/* ---------- asset cache (video / immagini) ---------- */
 
 const videoCache = new Map<string, HTMLVideoElement>();
 
 export const getVideoEl = (clip: Clip): HTMLVideoElement | null => {
   if (!clip.src) return null;
   let el = videoCache.get(clip.id);
-  if (!el) {
+  if (!el || el.src !== clip.src) {
     el = document.createElement("video");
     el.src = clip.src;
     el.muted = true;
@@ -59,9 +46,32 @@ export const getVideoEl = (clip: Clip): HTMLVideoElement | null => {
   return el;
 };
 
+const imageCache = new Map<string, HTMLImageElement>();
+
+export const getImageEl = (src: string): HTMLImageElement => {
+  let el = imageCache.get(src);
+  if (!el) {
+    el = new Image();
+    el.src = src;
+    imageCache.set(src, el);
+  }
+  return el;
+};
+
+/* ---------- chroma key ---------- */
+
+const hexToRgb = (hex: string): [number, number, number] => {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex ?? "#00ff00");
+  if (!m) return [0, 255, 0];
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+};
+
 const chromaCanvas = document.createElement("canvas");
 
-const drawChromaVideo = (ctx: CanvasRenderingContext2D, el: HTMLVideoElement, t: number, w: number, h: number, tol: number, soft: number) => {
+const drawChromaVideo = (
+  ctx: CanvasRenderingContext2D, el: HTMLVideoElement, t: number,
+  w: number, h: number, tol: number, soft: number, keyHex: string
+) => {
   const vw = el.videoWidth, vh = el.videoHeight;
   if (!vw || !vh) return;
   if (Math.abs(el.currentTime - t) > 0.12) el.currentTime = t % (el.duration || 1);
@@ -73,19 +83,74 @@ const drawChromaVideo = (ctx: CanvasRenderingContext2D, el: HTMLVideoElement, t:
   cctx.drawImage(el, 0, 0, cw, ch);
   const img = cctx.getImageData(0, 0, cw, ch);
   const d = img.data;
+  const [kr, kg, kb] = hexToRgb(keyHex);
   const tolSq = tol * tol;
   for (let i = 0; i < d.length; i += 4) {
-    const dr = d[i] - 0, dg = d[i + 1] - 255, db = d[i + 2] - 0;
+    const dr = d[i] - kr, dg = d[i + 1] - kg, db = d[i + 2] - kb;
     const dist = dr * dr * 0.4 + dg * dg * 0.7 + db * db * 0.4;
     if (dist < tolSq) d[i + 3] = 0;
     else if (dist < tolSq * (1 + soft)) d[i + 3] = Math.round(d[i + 3] * ((dist - tolSq) / (tolSq * soft)));
   }
   cctx.putImageData(img, 0, 0);
-  // cover fit
   const scale = Math.max(w / vw, h / vh);
   const dw = vw * scale, dh = vh * scale;
   ctx.drawImage(chromaCanvas, (w - dw) / 2, (h - dh) / 2, dw, dh);
 };
+
+/* ---------- analisi AI del green screen ---------- */
+
+export const analyzeGreenScreen = (el: HTMLVideoElement): Promise<{ isGreen: boolean; key: string; tolerance: number }> =>
+  new Promise((resolve) => {
+    const fail = () => resolve({ isGreen: false, key: "#00ff00", tolerance: 90 });
+    const timeout = setTimeout(fail, 3500);
+    const run = () => {
+      clearTimeout(timeout);
+      try {
+        const vw = el.videoWidth, vh = el.videoHeight;
+        if (!vw || !vh) return fail();
+        const cw = Math.min(160, vw);
+        const ch = Math.round((cw / vw) * vh);
+        const cv = document.createElement("canvas");
+        cv.width = cw; cv.height = ch;
+        const cctx = cv.getContext("2d", { willReadFrequently: true })!;
+        cctx.drawImage(el, 0, 0, cw, ch);
+        const d = cctx.getImageData(0, 0, cw, ch).data;
+        let green = 0, total = 0, sr = 0, sg = 0, sb = 0, varSum = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          total++;
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (g > 60 && g - r > 24 && g - b > 24) {
+            green++; sr += r; sg += g; sb += b;
+          }
+        }
+        const ratio = green / Math.max(1, total);
+        if (ratio < 0.22 || green === 0) return resolve({ isGreen: false, key: "#00ff00", tolerance: 90 });
+        const ar = sr / green, ag = sg / green, ab = sb / green;
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i], g = d[i + 1], b = d[i + 2];
+          if (g > 60 && g - r > 24 && g - b > 24) {
+            const dist = Math.sqrt(0.4 * (r - ar) ** 2 + 0.7 * (g - ag) ** 2 + 0.4 * (b - ab) ** 2);
+            varSum += dist;
+          }
+        }
+        const spread = varSum / green;
+        const tol = Math.round(clamp(70 + spread * 2.4, 75, 165));
+        const toHex = (v: number) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, "0");
+        resolve({ isGreen: true, key: `#${toHex(ar)}${toHex(ag)}${toHex(ab)}`, tolerance: tol });
+      } catch {
+        fail();
+      }
+    };
+    const trySeek = () => {
+      el.currentTime = Math.min(0.2, (el.duration || 1) / 2);
+      el.onseeked = run;
+    };
+    if (el.readyState >= 2) trySeek();
+    else {
+      el.onloadeddata = trySeek;
+      el.onerror = fail;
+    }
+  });
 
 /* ---------- frame compositor ---------- */
 
@@ -97,18 +162,29 @@ export interface FrameState {
 
 export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t: number, st: FrameState) {
   ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#0c0f14";
+  ctx.fillStyle = "#0b0b0c";
   ctx.fillRect(0, 0, W, H);
 
   const active = (c: Clip) => t >= c.start && t < c.start + c.duration;
   const local = (c: Clip) => t - c.start;
 
-  // 1. sfondi (ultimo attivo vince)
+  // 1. sfondi (ultimo attivo vince) — procedurali o immagine importata
   const bgs = st.clips.filter((c) => c.track === "bg" && active(c));
   const bg = bgs[bgs.length - 1];
-  if (bg) getBg(bg.refId).draw(ctx, local(bg), W, H, st.eco);
+  if (bg) {
+    if (bg.refId.startsWith("img:") && bg.src) {
+      const img = getImageEl(bg.src);
+      if (img.complete && img.naturalWidth > 0) {
+        const scale = Math.max(W / img.naturalWidth, H / img.naturalHeight);
+        const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+        ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      }
+    } else {
+      getBg(bg.refId).draw(ctx, local(bg), W, H, st.eco);
+    }
+  }
 
-  // 2. effetti / video green screen
+  // 2. effetti green screen + video importati
   for (const c of st.clips) {
     if (!active(c)) continue;
     if (c.kind === "fx") {
@@ -141,7 +217,7 @@ export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t
           const scale = Math.max(W / el.videoWidth, H / el.videoHeight);
           ctx.drawImage(el, (W - el.videoWidth * scale) / 2, (H - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
         } else {
-          drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5);
+          drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5, c.keyColor ?? "#00ff00");
         }
         ctx.restore();
         if (el.paused) void el.play().catch(() => undefined);
@@ -156,18 +232,33 @@ export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t
     }
   }
 
-  // 4. modelli 3D
+  // 4. modelli 3D (luci per modello)
   const models = st.clips.filter((c) => c.kind === "model" && active(c));
   if (models.length) {
     if (!mgr) { void ensureThree(st.eco); return; }
     for (const c of models) {
       const p = poseAt(c, local(c));
-      const canvas3d = mgr.render(c.refId, c.modelColor ?? "#ffb27a", c.wireframe ?? false, p.rx, p.ry + local(c) * 0.3, p.rz, st.lights);
+      const canvas3d = mgr.render(c.refId, c.modelColor ?? "#c9c9cf", c.wireframe ?? false, p.rx, p.ry + local(c) * 0.3, p.rz, c.lights ?? st.lights);
+      if (!canvas3d) continue;
       const size = p.s * H * 2.1;
       ctx.drawImage(canvas3d, p.x * W - size / 2, p.y * H - size / 2, size, size);
     }
   }
 }
+
+let mgr: ReturnType<typeof getSceneManager> | null = null;
+let loading = false;
+const ensureThree = async (eco: boolean) => {
+  if (mgr || loading) return;
+  loading = true;
+  try {
+    const mod = await import("./three");
+    mgr = mod.getSceneManager(eco);
+  } finally {
+    loading = false;
+  }
+};
+void ensureThree(false);
 
 /* ---------- export video ---------- */
 
