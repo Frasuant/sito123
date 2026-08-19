@@ -144,6 +144,14 @@ const SoundPanel = () => {
   const toast = useStudio((s) => s.toast);
   const [q, setQ] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingIntervalRef = useRef<number | null>(null);
+  
   const list = useMemo(
     () => SOUND_CATALOG.filter((s) => !q || (s.name + " " + s.desc + " " + s.tags).toLowerCase().includes(q.toLowerCase())),
     [q]
@@ -151,8 +159,130 @@ const SoundPanel = () => {
 
   useEffect(() => () => audioEngine.stopAll(), []);
 
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      audioContextRef.current = new AudioContext();
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioBuffer = await audioContextRef.current!.decodeAudioData(arrayBuffer);
+        
+        // Crea un ID unico per la registrazione
+        const recordId = `rec_${Date.now()}`;
+        const duration = audioBuffer.duration;
+        
+        // Salva il buffer audio nel catalogo suoni temporaneo
+        (window as any).__customSounds = (window as any).__customSounds || {};
+        (window as any).__customSounds[recordId] = audioBuffer;
+        
+        // Aggiungi alla timeline
+        add.addSound(recordId, `Registrazione ${new Date().toLocaleTimeString()}`, duration);
+        toast(`Registrazione aggiunta (${duration.toFixed(1)}s)`, "success");
+        
+        // Cleanup
+        stream.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+        audioContextRef.current = null;
+        setIsRecording(false);
+        setRecordingTime(0);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      
+      // Timer per mostrare il tempo di registrazione
+      recordingIntervalRef.current = window.setInterval(() => {
+        setRecordingTime(prev => prev + 0.1);
+      }, 100);
+
+    } catch (err) {
+      toast("Impossibile accedere al microfono", "error");
+      console.error(err);
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+        recordingIntervalRef.current = null;
+      }
+    }
+  };
+
+  const handleImportMP3 = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    const file = files[0];
+    const reader = new FileReader();
+    
+    reader.onload = async (event) => {
+      try {
+        const arrayBuffer = event.target?.result as ArrayBuffer;
+        const audioContext = new AudioContext();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        const importId = `imp_${Date.now()}`;
+        (window as any).__customSounds = (window as any).__customSounds || {};
+        (window as any).__customSounds[importId] = audioBuffer;
+        
+        add.addSound(importId, file.name.replace(/\.[^/.]+$/, ""), audioBuffer.duration);
+        toast(`Audio importato (${audioBuffer.duration.toFixed(1)}s)`, "success");
+        
+        audioContext.close();
+      } catch (err) {
+        toast("Errore nell'importazione audio", "error");
+        console.error(err);
+      }
+    };
+    
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  };
+
   return (
     <div className="space-y-3">
+      {/* Registrazione e Import */}
+      <div className="flex gap-2">
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`flex-1 inline-flex items-center justify-center gap-2 h-9 rounded-lg text-[12px] font-bold transition-all active:scale-95 ${
+            isRecording 
+              ? "bg-danger-500 hover:bg-danger-400 text-white animate-pulse" 
+              : "bg-ink-800 hover:bg-ink-750 text-ink-200 border border-ink-700"
+          }`}
+        >
+          <Icon name={isRecording ? "square" : "mic"} size={14} />
+          {isRecording ? `Registra (${recordingTime.toFixed(1)}s)` : "Registra Voce"}
+        </button>
+        <label className="inline-flex items-center justify-center gap-2 h-9 px-3 rounded-lg bg-ink-800 hover:bg-ink-750 text-ink-200 border border-ink-700 text-[12px] font-bold cursor-pointer transition-all active:scale-95">
+          <Icon name="upload" size={14} />
+          Importa MP3
+          <input
+            type="file"
+            accept=".mp3,.wav,.webm,audio/*"
+            onChange={handleImportMP3}
+            className="hidden"
+          />
+        </label>
+      </div>
+
       <div className="flex items-center justify-between gap-2">
         <SectionTitle>Libreria suoni</SectionTitle>
         <a

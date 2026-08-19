@@ -240,6 +240,12 @@ const sharedCtx = () => {
 };
 
 export async function getSoundBuffer(id: string): Promise<AudioBuffer> {
+  // Controlla prima i suoni custom (registrazioni e importazioni)
+  const customSounds = (window as any).__customSounds as Map<string, AudioBuffer> | undefined;
+  if (customSounds && customSounds[id]) {
+    return customSounds[id];
+  }
+  
   const cached = bufferCache.get(id);
   if (cached) return cached;
   const def = SOUND_CATALOG.find((s) => s.id === id) ?? SOUND_CATALOG[0];

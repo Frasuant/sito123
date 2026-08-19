@@ -230,6 +230,44 @@ export const PRESET_CATALOG: PresetDef[] = [
       ctx.restore();
     },
   },
+  {
+    id: "glow", name: "Glow AE", desc: "Bagliore intenso stile After Effects", sample: "GLOW", dur: 3,
+    css: { color: "#00f0ff", shadow: "0 0 30px #00f0ff", weight: 700 },
+    draw(ctx, clip, t, W, H) {
+      const { x, y } = basePos(clip, W, H);
+      const pulse = 20 + Math.sin(t * 3) * 12;
+      const pulse2 = 35 + Math.cos(t * 2.5) * 18;
+      ctx.save();
+      ctx.translate(x, y);
+      setFont(ctx, clip, H);
+      // Glow esterno intenso
+      ctx.shadowColor = clip.glowColor ?? "#00f0ff";
+      ctx.shadowBlur = pulse * (H / 720);
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = clip.glowColor ?? "#00f0ff";
+      ctx.globalAlpha = 0.7;
+      ctx.fillText(clip.text ?? "", 0, 0);
+      
+      // Secondo layer glow più ampio
+      ctx.shadowBlur = pulse2 * (H / 720);
+      ctx.globalAlpha = 0.4;
+      ctx.fillText(clip.text ?? "", 0, 0);
+      
+      // Layer centrale bianco brillante
+      ctx.shadowBlur = pulse * 0.3 * (H / 720);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(clip.text ?? "", 0, 0);
+      
+      // Layer colore principale
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = clip.color ?? "#e6ebf4";
+      ctx.fillText(clip.text ?? "", 0, 0);
+      
+      ctx.restore();
+    },
+  },
 ];
 
 export const getPreset = (id: string) => PRESET_CATALOG.find((p) => p.id === id) ?? PRESET_CATALOG[0];
