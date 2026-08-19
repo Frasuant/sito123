@@ -266,6 +266,7 @@ export default function App() {
   const importFiles = useStudio((s) => s.importFiles);
   const clips = useStudio((s) => s.clips);
   const projectDur = useStudio((s) => s.projectDur);
+  const saveProject = useStudio((s) => s.saveProject);
 
   /* Load projects from localStorage */
   useEffect(() => {
@@ -277,21 +278,10 @@ export default function App() {
     void useStudio.getState().hydrateMedia();
   }, []);
 
-  /* Save current project to projects list */
+  /* Auto-save current project */
   useEffect(() => {
     if (!showHome && clips.length > 0) {
-      const currentProject: ProjectMeta = {
-        id: "current",
-        name: "Progetto Corrente",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        clips: [...clips],
-        projectDur,
-      };
-      const updated = projects.filter(p => p.id !== "current");
-      const newProjects = [...updated, currentProject];
-      setProjects(newProjects);
-      saveProjects(newProjects);
+      saveProject();
     }
   }, [clips, projectDur, showHome]);
 

@@ -114,6 +114,7 @@ export interface StudioState {
   dismissToast: (id: number) => void;
   loadDemo: () => void;
   clearProject: () => void;
+  saveProject: () => void;
   extendDuration: () => void;
   importFiles: (files: FileList | File[]) => Promise<void>;
   removeMediaAsset: (id: string) => void;

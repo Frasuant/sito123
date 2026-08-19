@@ -6,7 +6,7 @@ import { BG_CATALOG } from "../lib/backgrounds";
 import { MODEL_CATALOG } from "../lib/models";
 import { SOUND_CATALOG, audioEngine, bufferToWav, getSoundBuffer } from "../lib/audio";
 import { Icon } from "./ui";
-import { fmtSize, type MediaAsset } from "../types";
+import { fmtSize, uid, type MediaAsset } from "../types";
 
 type Tab = "media" | "motion" | "sounds" | "greens" | "bgs" | "models";
 

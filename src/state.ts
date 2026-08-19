@@ -7,6 +7,8 @@ import { analyzeGreenScreen, poseAt } from "./lib/render";
 import { getPreset } from "./lib/presets";
 import { idbPut, idbGet, idbDel } from "./lib/idb";
 
+const PROJECTS_KEY = "after-imam-projects";
+
 let toastSeq = 1;
 
 const VIDEO_EXT = ["mp4", "webm", "mov", "m4v", "mkv"];
@@ -331,6 +333,27 @@ export const useStudio = create<StudioState>()(
 
       clearProject: () =>
         set({ clips: [], playhead: 0, selectedId: null, projectDur: 15, playing: false }),
+
+      saveProject: () => {
+        const s = get();
+        const currentProject = {
+          id: "current",
+          name: "Progetto Corrente",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          clips: [...s.clips],
+          projectDur: s.projectDur,
+        };
+        try {
+          const stored = localStorage.getItem(PROJECTS_KEY);
+          const projects: any[] = stored ? JSON.parse(stored) : [];
+          const updated = projects.filter(p => p.id !== "current");
+          updated.push(currentProject);
+          localStorage.setItem(PROJECTS_KEY, JSON.stringify(updated));
+        } catch (e) {
+          console.error("Save project error:", e);
+        }
+      },
     }),
     {
       name: "moviola-studio-v2",
