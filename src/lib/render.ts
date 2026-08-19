@@ -46,6 +46,13 @@ export const getVideoEl = (clip: Clip): HTMLVideoElement | null => {
   return el;
 };
 
+export const pauseAllVideos = () => {
+  videoCache.forEach(el => {
+    el.pause();
+    el.currentTime = 0;
+  });
+};
+
 const imageCache = new Map<string, HTMLImageElement>();
 
 export const getImageEl = (src: string): HTMLImageElement => {
@@ -184,44 +191,56 @@ export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t
     }
   }
 
-  // 2. effetti green screen + video importati
-  for (const c of st.clips) {
-    if (!active(c)) continue;
-    if (c.kind === "fx") {
-      const fx = getFx(c.refId);
-      const lt = local(c) % fx.cycle;
-      const scale = c.elScale ?? 1;
-      const cx = (c.elX ?? 0.5) * W;
-      const cy = (c.elY ?? 0.5) * H;
+  // 2. effetti green screen + video importati (ordinati per z-index implicito)
+  const videos = st.clips.filter((c) => c.kind === "video" && active(c));
+  const fxs = st.clips.filter((c) => c.kind === "fx" && active(c));
+  
+  // Render FX first (they're usually background elements)
+  for (const c of fxs) {
+    const fx = getFx(c.refId);
+    const lt = local(c) % fx.cycle;
+    const scale = c.elScale ?? 1;
+    const cx = (c.elX ?? 0.5) * W;
+    const cy = (c.elY ?? 0.5) * H;
+    ctx.save();
+    if (c.chroma === false) {
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.fillStyle = GREEN;
+      ctx.fillRect(-W / 2, -H / 2, W, H);
+      ctx.translate(-W / 2, -H / 2);
+      fx.draw(ctx, lt, W, H, st.eco);
+    } else {
+      ctx.translate(cx - (W * scale) / 2, cy - (H * scale) / 2);
+      ctx.scale(scale, scale);
+      fx.draw(ctx, lt, W, H, st.eco);
+    }
+    ctx.restore();
+  }
+  
+  // Render videos with proper sync
+  for (const c of videos) {
+    const el = getVideoEl(c);
+    if (el && el.readyState >= 2) {
       ctx.save();
+      // Fix: Ensure video stays synced and doesn't continue playing after stop
+      const targetTime = local(c) % (el.duration || 1);
+      if (Math.abs(el.currentTime - targetTime) > 0.15) {
+        el.currentTime = targetTime;
+      }
+      if (!st.playing && el.paused === false) {
+        el.pause();
+      }
       if (c.chroma === false) {
-        ctx.translate(cx, cy);
-        ctx.scale(scale, scale);
         ctx.fillStyle = GREEN;
-        ctx.fillRect(-W / 2, -H / 2, W, H);
-        ctx.translate(-W / 2, -H / 2);
-        fx.draw(ctx, lt, W, H, st.eco);
+        ctx.fillRect(0, 0, W, H);
+        const scale = Math.max(W / el.videoWidth, H / el.videoHeight);
+        ctx.drawImage(el, (W - el.videoWidth * scale) / 2, (H - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
       } else {
-        ctx.translate(cx - (W * scale) / 2, cy - (H * scale) / 2);
-        ctx.scale(scale, scale);
-        fx.draw(ctx, lt, W, H, st.eco);
+        drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5, c.keyColor ?? "#00ff00");
       }
       ctx.restore();
-    } else if (c.kind === "video") {
-      const el = getVideoEl(c);
-      if (el && el.readyState >= 2) {
-        ctx.save();
-        if (c.chroma === false) {
-          ctx.fillStyle = GREEN;
-          ctx.fillRect(0, 0, W, H);
-          const scale = Math.max(W / el.videoWidth, H / el.videoHeight);
-          ctx.drawImage(el, (W - el.videoWidth * scale) / 2, (H - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
-        } else {
-          drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5, c.keyColor ?? "#00ff00");
-        }
-        ctx.restore();
-        if (el.paused) void el.play().catch(() => undefined);
-      }
+      if (st.playing && el.paused) void el.play().catch(() => undefined);
     }
   }
 
@@ -298,6 +317,7 @@ export function startExport(opts: ExportOpts): { done: Promise<Blob | null>; can
     rec.onstop = () => {
       if (dest) opts.audioEngine.releaseExportDest(dest);
       opts.audioEngine.stopAll();
+      pauseAllVideos();
       resolve(cancelled ? null : new Blob(chunks, { type: "video/webm" }));
     };
 
@@ -311,7 +331,7 @@ export function startExport(opts: ExportOpts): { done: Promise<Blob | null>; can
       if (t >= opts.duration) {
         drawFrame(ctx, opts.width, opts.height, opts.duration - 0.001, opts.state());
         opts.onProgress(1);
-        setTimeout(() => rec.stop(), 120);
+        setTimeout(() => { rec.stop(); pauseAllVideos(); }, 120);
         return;
       }
       drawFrame(ctx, opts.width, opts.height, t, opts.state());
@@ -321,5 +341,5 @@ export function startExport(opts: ExportOpts): { done: Promise<Blob | null>; can
     tick();
   });
 
-  return { done, cancel: () => { cancelled = true; } };
+  return { done, cancel: () => { cancelled = true; pauseAllVideos(); } };
 }
