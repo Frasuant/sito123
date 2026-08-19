@@ -7,34 +7,26 @@ import { Inspector } from "./components/Inspector";
 import { ExportModal } from "./components/ExportModal";
 import { Icon, Toasts, Toggle } from "./components/ui";
 
-const Logo = () => (
-  <div className="flex items-center gap-2.5 select-none">
-    <div className="w-8 h-8 rounded-lg bg-ink-800 border border-ink-700 grid place-items-center relative overflow-hidden">
-      <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
-        <path d="M8 21 L16 6 L24 21 Z" stroke="#ff7a1a" strokeWidth="2.6" strokeLinejoin="round" />
-        <circle cx="16" cy="24" r="3" fill="#39d0b8" />
-      </svg>
-    </div>
-    <div className="leading-none">
-      <div className="font-display font-bold text-[15px] tracking-tight text-ink-100">
-        After<span className="text-skyx-400">Imam</span>
-      </div>
-      <div className="text-[8.5px] uppercase tracking-[0.22em] text-ink-400 font-bold mt-0.5">AI Video Studio</div>
-    </div>
-  </div>
-);
+/* ---------------- Types ---------------- */
+interface ProjectMeta {
+  id: string;
+  name: string;
+  thumbnail?: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 /* ---------------- Startup Screen ---------------- */
 const StartupScreen = ({ onComplete }: { onComplete: () => void }) => {
   const [phase, setPhase] = useState<"after" | "imam" | "done">("after");
-
+  
   useEffect(() => {
     const t1 = setTimeout(() => setPhase("imam"), 800);
     const t2 = setTimeout(() => setPhase("done"), 1600);
     const t3 = setTimeout(onComplete, 2000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, [onComplete]);
-
+  
   return (
     <div className="fixed inset-0 z-[100] bg-black grid place-items-center">
       <div className="text-center relative">
@@ -51,6 +43,142 @@ const StartupScreen = ({ onComplete }: { onComplete: () => void }) => {
     </div>
   );
 };
+
+/* ---------------- Home Screen with Projects ---------------- */
+const HomeScreen = ({ 
+  projects, 
+  onNewProject, 
+  onLoadProject, 
+  onDeleteProject 
+}: { 
+  projects: ProjectMeta[]; 
+  onNewProject: () => void; 
+  onLoadProject: (id: string) => void;
+  onDeleteProject: (id: string) => void;
+}) => {
+  return (
+    <div className="min-h-screen bg-ink-950 text-ink-100 p-8">
+      <div className="max-w-6xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-ink-800 border border-ink-700 grid place-items-center">
+              <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+                <path d="M8 21 L16 6 L24 21 Z" stroke="#ff7a1a" strokeWidth="2.6" strokeLinejoin="round" />
+                <circle cx="16" cy="24" r="3" fill="#3bd6ae" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="font-display font-bold text-2xl text-white">
+                After<span className="text-skyx-400">Imam</span>
+              </h1>
+              <p className="text-[10px] uppercase tracking-[0.25em] text-ink-400 font-bold mt-0.5">
+                AI Video Studio
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onNewProject}
+            className="inline-flex items-center gap-2 h-10 px-5 rounded-lg bg-ember-500 hover:bg-ember-400 text-ink-950 text-[13px] font-bold transition-all active:scale-95 shadow-lg shadow-ember-600/25"
+          >
+            <Icon name="plus" size={16} /> Nuovo Progetto
+          </button>
+        </div>
+
+        {/* Projects Grid */}
+        <div className="mb-8">
+          <h2 className="text-[11px] uppercase tracking-[0.2em] text-ink-400 font-bold mb-4">
+            I Tuoi Progetti
+          </h2>
+          {projects.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-ink-700 bg-ink-900/50 p-12 text-center">
+              <div className="mx-auto mb-4 w-16 h-16 rounded-2xl bg-ink-800 border border-ink-600 grid place-items-center text-ink-300">
+                <Icon name="film" size={28} />
+              </div>
+              <p className="font-display font-bold text-[18px] text-ink-200 mb-2">
+                Nessun progetto ancora
+              </p>
+              <p className="text-[12px] text-ink-400 mb-6">
+                Crea il tuo primo video con After Imam
+              </p>
+              <button
+                onClick={onNewProject}
+                className="inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-skyx-500 hover:bg-skyx-400 text-ink-950 text-[12px] font-bold transition-all active:scale-95"
+              >
+                <Icon name="spark" size={14} /> Inizia Ora
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {projects.map((project) => (
+                <div
+                  key={project.id}
+                  className="group relative rounded-xl bg-ink-900 border border-ink-800 overflow-hidden hover:border-ink-600 transition-all"
+                >
+                  {/* Thumbnail */}
+                  <div 
+                    className="aspect-video bg-ink-800 cursor-pointer"
+                    onClick={() => onLoadProject(project.id)}
+                  >
+                    {project.thumbnail ? (
+                      <img src={project.thumbnail} alt={project.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full grid place-items-center text-ink-600">
+                        <Icon name="film" size={32} />
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Info */}
+                  <div className="p-3">
+                    <h3 
+                      className="font-medium text-[13px] text-ink-100 truncate cursor-pointer hover:text-white"
+                      onClick={() => onLoadProject(project.id)}
+                    >
+                      {project.name || "Senza titolo"}
+                    </h3>
+                    <p className="text-[10px] text-ink-500 mt-1">
+                      {new Date(project.updatedAt).toLocaleDateString("it-IT", { 
+                        day: "2-digit", 
+                        month: "short",
+                        year: "numeric"
+                      })}
+                    </p>
+                  </div>
+
+                  {/* Delete button */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDeleteProject(project.id); }}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-ink-950/80 border border-ink-700 text-ink-400 hover:text-danger-400 hover:border-danger-400/50 grid place-items-center opacity-0 group-hover:opacity-100 transition-all"
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Logo = () => (
+  <div className="flex items-center gap-2.5 select-none">
+    <div className="w-8 h-8 rounded-lg bg-ink-800 border border-ink-700 grid place-items-center relative overflow-hidden">
+      <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+        <path d="M8 21 L16 6 L24 21 Z" stroke="#ff7a1a" strokeWidth="2.6" strokeLinejoin="round" />
+        <circle cx="16" cy="24" r="3" fill="#39d0b8" />
+      </svg>
+    </div>
+    <div className="leading-none">
+      <div className="font-display font-bold text-[15px] tracking-tight text-ink-100">
+        After<span className="text-skyx-400">Imam</span>
+      </div>
+      <div className="text-[8.5px] uppercase tracking-[0.22em] text-ink-400 font-bold mt-0.5">AI Video Studio</div>
+    </div>
+  </div>
+);
 
 const TopBar = ({ onExport }: { onExport: () => void }) => {
   const eco = useStudio((s) => s.eco);
@@ -113,9 +241,11 @@ const TopBar = ({ onExport }: { onExport: () => void }) => {
 
 export default function App() {
   const [showStartup, setShowStartup] = useState(true);
+  const [showHome, setShowHome] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dragDepth, setDragDepth] = useState(0);
   const importFiles = useStudio((s) => s.importFiles);
+  const clips = useStudio((s) => s.clips);
 
   /* ripristina i file salvati in IndexedDB dopo il reload */
   useEffect(() => {
@@ -145,7 +275,18 @@ export default function App() {
   const hasFiles = (e: { dataTransfer: DataTransfer }) => Array.from(e.dataTransfer.types).includes("Files");
 
   if (showStartup) {
-    return <StartupScreen onComplete={() => setShowStartup(false)} />;
+    return <StartupScreen onComplete={() => setShowHome(true)} />;
+  }
+
+  if (showHome) {
+    return (
+      <HomeScreen
+        projects={[]}
+        onNewProject={() => setShowHome(false)}
+        onLoadProject={() => setShowHome(false)}
+        onDeleteProject={() => {}}
+      />
+    );
   }
 
   return (
