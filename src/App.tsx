@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useStudio } from "./state";
 import { LeftPanel } from "./components/LeftPanel";
 import { Preview } from "./components/Preview";
@@ -17,12 +17,40 @@ const Logo = () => (
     </div>
     <div className="leading-none">
       <div className="font-display font-bold text-[15px] tracking-tight text-ink-100">
-        Moviola<span className="text-ember-500">.</span>
+        After<span className="text-skyx-400">Imam</span>
       </div>
-      <div className="text-[8.5px] uppercase tracking-[0.22em] text-ink-400 font-bold mt-0.5">studio per creator</div>
+      <div className="text-[8.5px] uppercase tracking-[0.22em] text-ink-400 font-bold mt-0.5">AI Video Studio</div>
     </div>
   </div>
 );
+
+/* ---------------- Startup Screen ---------------- */
+const StartupScreen = ({ onComplete }: { onComplete: () => void }) => {
+  const [phase, setPhase] = useState<"after" | "imam" | "done">("after");
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setPhase("imam"), 800);
+    const t2 = setTimeout(() => setPhase("done"), 1600);
+    const t3 = setTimeout(onComplete, 2000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [onComplete]);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black grid place-items-center">
+      <div className="text-center relative">
+        <div className={`transition-all duration-700 ${phase === "after" ? "opacity-100 scale-100" : "opacity-0 scale-90"}`}>
+          <h1 className="font-display font-black text-6xl text-white tracking-tight">After</h1>
+        </div>
+        <div className={`absolute inset-0 grid place-items-center transition-all duration-700 ${phase === "imam" ? "opacity-100 scale-100" : "opacity-0 scale-110"}`}>
+          <h1 className="font-display font-black text-6xl text-skyx-400 tracking-tight">Imam</h1>
+        </div>
+        <p className={`mt-8 text-[11px] text-ink-500 uppercase tracking-[0.3em] transition-all duration-1000 ${phase !== "done" ? "opacity-100" : "opacity-0"}`}>
+          Caricamento...
+        </p>
+      </div>
+    </div>
+  );
+};
 
 const TopBar = ({ onExport }: { onExport: () => void }) => {
   const eco = useStudio((s) => s.eco);
@@ -84,6 +112,7 @@ const TopBar = ({ onExport }: { onExport: () => void }) => {
 };
 
 export default function App() {
+  const [showStartup, setShowStartup] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [dragDepth, setDragDepth] = useState(0);
   const importFiles = useStudio((s) => s.importFiles);
@@ -114,6 +143,10 @@ export default function App() {
   }, []);
 
   const hasFiles = (e: { dataTransfer: DataTransfer }) => Array.from(e.dataTransfer.types).includes("Files");
+
+  if (showStartup) {
+    return <StartupScreen onComplete={() => setShowStartup(false)} />;
+  }
 
   return (
     <div
