@@ -287,13 +287,27 @@ export const Inspector = () => {
             <input type="color" value={clip.color ?? "#f5f5f5"} onChange={(e) => s.updateClip(clip.id, { color: e.target.value })} />
           </label>
           <label className="flex items-center justify-between mb-2.5">
-            <span className="text-[11px] font-semibold text-ink-300">Contorno</span>
-            <input type="color" value={clip.strokeColor ?? "#000000"} onChange={(e) => s.updateClip(clip.id, { strokeColor: e.target.value })} />
+            <span className="text-[11px] font-semibold text-ink-300">Dimensione testo</span>
+            <input type="range" min={24} max={200} step={1} value={clip.fontSize ?? 64} onChange={(e) => s.updateClip(clip.id, { fontSize: parseFloat(e.target.value) })} className="w-32" />
+            <span className="text-[10px] font-mono text-ink-400 w-12 text-right">{Math.round(clip.fontSize ?? 64)}px</span>
           </label>
-          <Num label="Dimensione" value={clip.fontSize ?? 8} min={2} max={18} step={0.5} onChange={(v) => s.updateClip(clip.id, { fontSize: v })} fmt={(v) => `${v.toFixed(1)}%`} />
-          <Num label="Spessore contorno" value={clip.strokeWidth ?? 0} min={0} max={8} step={0.5} onChange={(v) => s.updateClip(clip.id, { strokeWidth: v })} />
-          <Num label="Posizione X" value={clip.x ?? 0.5} min={0} max={1} onChange={(v) => s.updateClip(clip.id, { x: v })} fmt={(v) => `${Math.round(v * 100)}%`} />
-          <Num label="Posizione Y" value={clip.y ?? 0.5} min={0} max={1} onChange={(v) => s.updateClip(clip.id, { y: v })} fmt={(v) => `${Math.round(v * 100)}%`} />
+          <label className="flex items-center justify-between mb-2.5">
+            <span className="text-[11px] font-semibold text-ink-300">Spessore contorno</span>
+            <input type="range" min={0} max={8} step={0.5} value={clip.strokeWidth ?? 0} onChange={(e) => s.updateClip(clip.id, { strokeWidth: parseFloat(e.target.value) })} className="w-32" />
+            <span className="text-[10px] font-mono text-ink-400 w-12 text-right">{(clip.strokeWidth ?? 0).toFixed(1)}</span>
+          </label>
+          <label className="flex items-center justify-between mb-2.5">
+            <span className="text-[11px] font-semibold text-ink-300">Colore contorno</span>
+            <input type="color" value={clip.strokeColor ?? "#10141b"} onChange={(e) => s.updateClip(clip.id, { strokeColor: e.target.value })} disabled={(clip.strokeWidth ?? 0) <= 0} />
+          </label>
+          {(clip.preset === "glow" || clip.preset === "neon") && (
+            <label className="flex items-center justify-between mb-2.5">
+              <span className="text-[11px] font-semibold text-ink-300">Colore Glow</span>
+              <input type="color" value={clip.glowColor ?? "#00f0ff"} onChange={(e) => s.updateClip(clip.id, { glowColor: e.target.value })} />
+            </label>
+          )}
+          <Num label="Posizione X" value={clip.x ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => s.updateClip(clip.id, { x: v })} fmt={(v) => `${Math.round(v * 100)}%`} />
+          <Num label="Posizione Y" value={clip.y ?? 0.5} min={0} max={1} step={0.01} onChange={(v) => s.updateClip(clip.id, { y: v })} fmt={(v) => `${Math.round(v * 100)}%`} />
         </Panel>
       )}
 
