@@ -37,7 +37,7 @@ export const getVideoEl = (clip: Clip): HTMLVideoElement | null => {
   if (!el || el.src !== clip.src) {
     el = document.createElement("video");
     el.src = clip.src;
-    el.muted = true;
+    el.muted = false; // Fix: enable audio
     el.loop = true;
     el.playsInline = true;
     el.preload = "auto";
@@ -175,8 +175,20 @@ export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t
   const active = (c: Clip) => t >= c.start && t < c.start + c.duration;
   const local = (c: Clip) => t - c.start;
 
-  // 1. sfondi (ultimo attivo vince) — procedurali o immagine importata
-  const bgs = st.clips.filter((c) => c.track === "bg" && active(c));
+  // Sort all clips by track order (higher tracks render on top)
+  // Track priority: bg (bottom) < fx < video < text < model (top)
+  const trackPriority: Record<string, number> = { bg: 0, fx: 1, video: 2, text: 3, model: 4, audio: -1 };
+  
+  // Get all active clips sorted by track priority and then by their order in the array
+  const allActive = st.clips.filter(active).sort((a, b) => {
+    const priorityDiff = (trackPriority[a.track] ?? 0) - (trackPriority[b.track] ?? 0);
+    if (priorityDiff !== 0) return priorityDiff;
+    // If same track, later clips in array render on top
+    return st.clips.indexOf(a) - st.clips.indexOf(b);
+  });
+
+  // 1. Render background first
+  const bgs = allActive.filter((c) => c.track === "bg");
   const bg = bgs[bgs.length - 1];
   if (bg) {
     if (bg.refId.startsWith("img:") && bg.src) {
@@ -191,73 +203,59 @@ export function drawFrame(ctx: CanvasRenderingContext2D, W: number, H: number, t
     }
   }
 
-  // 2. effetti green screen + video importati (ordinati per z-index implicito)
-  const videos = st.clips.filter((c) => c.kind === "video" && active(c));
-  const fxs = st.clips.filter((c) => c.kind === "fx" && active(c));
-  
-  // Render FX first (they're usually background elements)
-  for (const c of fxs) {
-    const fx = getFx(c.refId);
-    const lt = local(c) % fx.cycle;
-    const scale = c.elScale ?? 1;
-    const cx = (c.elX ?? 0.5) * W;
-    const cy = (c.elY ?? 0.5) * H;
-    ctx.save();
-    if (c.chroma === false) {
-      ctx.translate(cx, cy);
-      ctx.scale(scale, scale);
-      ctx.fillStyle = GREEN;
-      ctx.fillRect(-W / 2, -H / 2, W, H);
-      ctx.translate(-W / 2, -H / 2);
-      fx.draw(ctx, lt, W, H, st.eco);
-    } else {
-      ctx.translate(cx - (W * scale) / 2, cy - (H * scale) / 2);
-      ctx.scale(scale, scale);
-      fx.draw(ctx, lt, W, H, st.eco);
-    }
-    ctx.restore();
-  }
-  
-  // Render videos with proper sync
-  for (const c of videos) {
-    const el = getVideoEl(c);
-    if (el && el.readyState >= 2) {
+  // 2. Render all other clips in order (FX, videos, text, models)
+  for (const c of allActive) {
+    if (c.track === "bg") continue; // Already rendered
+    
+    if (c.kind === "fx") {
+      const fx = getFx(c.refId);
+      const lt = local(c) % fx.cycle;
+      const scale = c.elScale ?? 1;
+      const cx = (c.elX ?? 0.5) * W;
+      const cy = (c.elY ?? 0.5) * H;
       ctx.save();
-      // Fix: Ensure video stays synced and doesn't continue playing after stop
-      const targetTime = local(c) % (el.duration || 1);
-      if (Math.abs(el.currentTime - targetTime) > 0.15) {
-        el.currentTime = targetTime;
-      }
-      if (!st.playing && el.paused === false) {
-        el.pause();
-      }
       if (c.chroma === false) {
+        ctx.translate(cx, cy);
+        ctx.scale(scale, scale);
         ctx.fillStyle = GREEN;
-        ctx.fillRect(0, 0, W, H);
-        const scale = Math.max(W / el.videoWidth, H / el.videoHeight);
-        ctx.drawImage(el, (W - el.videoWidth * scale) / 2, (H - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
+        ctx.fillRect(-W / 2, -H / 2, W, H);
+        ctx.translate(-W / 2, -H / 2);
+        fx.draw(ctx, lt, W, H, st.eco);
       } else {
-        drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5, c.keyColor ?? "#00ff00");
+        ctx.translate(cx - (W * scale) / 2, cy - (H * scale) / 2);
+        ctx.scale(scale, scale);
+        fx.draw(ctx, lt, W, H, st.eco);
       }
       ctx.restore();
-      if (st.playing && el.paused) void el.play().catch(() => undefined);
-    }
-  }
-
-  // 3. testi con preset motion
-  for (const c of st.clips) {
-    if (c.kind === "text" && active(c)) {
+    } else if (c.kind === "video") {
+      const el = getVideoEl(c);
+      if (el && el.readyState >= 2) {
+        ctx.save();
+        const targetTime = local(c) % (el.duration || 1);
+        if (Math.abs(el.currentTime - targetTime) > 0.15) {
+          el.currentTime = targetTime;
+        }
+        if (!st.playing && el.paused === false) {
+          el.pause();
+        }
+        if (c.chroma === false) {
+          ctx.fillStyle = GREEN;
+          ctx.fillRect(0, 0, W, H);
+          const scale = Math.max(W / el.videoWidth, H / el.videoHeight);
+          ctx.drawImage(el, (W - el.videoWidth * scale) / 2, (H - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
+        } else {
+          drawChromaVideo(ctx, el, local(c), W, H, c.tolerance ?? 90, c.softness ?? 2.5, c.keyColor ?? "#00ff00");
+        }
+        ctx.restore();
+        if (st.playing && el.paused) void el.play().catch(() => undefined);
+      }
+    } else if (c.kind === "text") {
       getPreset(c.preset ?? "popin").draw(ctx, c, local(c), W, H);
-    }
-  }
-
-  // 4. modelli 3D (luci per modello)
-  const models = st.clips.filter((c) => c.kind === "model" && active(c));
-  if (models.length) {
-    if (!mgr) { void ensureThree(st.eco); return; }
-    for (const c of models) {
+    } else if (c.kind === "model") {
       const p = poseAt(c, local(c));
-      const canvas3d = mgr.render(c.refId, c.modelColor ?? "#c9c9cf", c.wireframe ?? false, p.rx, p.ry + local(c) * 0.3, p.rz, c.lights ?? st.lights);
+      const isCustom = c.refId.startsWith("custom:");
+      if (isCustom && !mgr?.hasCustom(c.refId)) continue;
+      const canvas3d = mgr?.render(c.refId, c.modelColor ?? "#c9c9cf", c.wireframe ?? false, p.rx, p.ry + local(c) * 0.3, p.rz, c.lights ?? st.lights);
       if (!canvas3d) continue;
       const size = p.s * H * 2.1;
       ctx.drawImage(canvas3d, p.x * W - size / 2, p.y * H - size / 2, size, size);
